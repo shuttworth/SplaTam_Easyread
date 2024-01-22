@@ -1,0 +1,49 @@
+2023-12-14 16:26:25,369 INFO    StreamThr :7848 [internal.py:wandb_internal():86] W&B internal server running at pid: 7848, started at: 2023-12-14 16:26:25.368325
+2023-12-14 16:26:25,371 DEBUG   HandlerThread:7848 [handler.py:handle_request():146] handle_request: status
+2023-12-14 16:26:25,382 INFO    WriterThread:7848 [datastore.py:open_for_write():85] open: /home/wangshouan/Nerf_Based_Slam_Code/SplaTAM/wandb/run-20231214_162625-jf4sbxmx/run-jf4sbxmx.wandb
+2023-12-14 16:26:25,383 DEBUG   SenderThread:7848 [sender.py:send():382] send: header
+2023-12-14 16:26:25,390 DEBUG   SenderThread:7848 [sender.py:send():382] send: run
+2023-12-14 16:26:26,081 ERROR   SenderThread:7848 [internal_api.py:execute():373] 404 response executing GraphQL.
+2023-12-14 16:26:26,081 ERROR   SenderThread:7848 [internal_api.py:execute():374] {"errors":[{"message":"project not found","path":["upsertBucket"]}],"data":{"upsertBucket":null}}
+2023-12-14 16:26:26,081 ERROR   SenderThread:7848 [sender.py:send_run():987] It appears that you do not have permission to access the requested resource. Please reach out to the project owner to grant you access. If you have the correct permissions, verify that there are no issues with your networking setup.(Error 404: Not Found)
+Traceback (most recent call last):
+  File "/home/wangshouan/anaconda3/envs/splatam/lib/python3.10/site-packages/wandb/sdk/lib/retry.py", line 131, in __call__
+    result = self._call_fn(*args, **kwargs)
+  File "/home/wangshouan/anaconda3/envs/splatam/lib/python3.10/site-packages/wandb/sdk/internal/internal_api.py", line 369, in execute
+    return self.client.execute(*args, **kwargs)  # type: ignore
+  File "/home/wangshouan/anaconda3/envs/splatam/lib/python3.10/site-packages/wandb/vendor/gql-0.2.0/wandb_gql/client.py", line 52, in execute
+    result = self._get_result(document, *args, **kwargs)
+  File "/home/wangshouan/anaconda3/envs/splatam/lib/python3.10/site-packages/wandb/vendor/gql-0.2.0/wandb_gql/client.py", line 60, in _get_result
+    return self.transport.execute(document, *args, **kwargs)
+  File "/home/wangshouan/anaconda3/envs/splatam/lib/python3.10/site-packages/wandb/sdk/lib/gql_request.py", line 59, in execute
+    request.raise_for_status()
+  File "/home/wangshouan/anaconda3/envs/splatam/lib/python3.10/site-packages/requests/models.py", line 1021, in raise_for_status
+    raise HTTPError(http_error_msg, response=self)
+requests.exceptions.HTTPError: 404 Client Error: Not Found for url: https://api.wandb.ai/graphql
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/wangshouan/anaconda3/envs/splatam/lib/python3.10/site-packages/wandb/sdk/internal/sender.py", line 985, in send_run
+    self._init_run(run, config_value_dict)
+  File "/home/wangshouan/anaconda3/envs/splatam/lib/python3.10/site-packages/wandb/sdk/internal/sender.py", line 1027, in _init_run
+    server_run, inserted, server_messages = self._api.upsert_run(
+  File "/home/wangshouan/anaconda3/envs/splatam/lib/python3.10/site-packages/wandb/apis/normalize.py", line 73, in wrapper
+    raise err
+  File "/home/wangshouan/anaconda3/envs/splatam/lib/python3.10/site-packages/wandb/apis/normalize.py", line 41, in wrapper
+    return func(*args, **kwargs)
+  File "/home/wangshouan/anaconda3/envs/splatam/lib/python3.10/site-packages/wandb/sdk/internal/internal_api.py", line 2212, in upsert_run
+    response = self.gql(
+  File "/home/wangshouan/anaconda3/envs/splatam/lib/python3.10/site-packages/wandb/sdk/internal/internal_api.py", line 341, in gql
+    ret = self._retry_gql(
+  File "/home/wangshouan/anaconda3/envs/splatam/lib/python3.10/site-packages/wandb/sdk/lib/retry.py", line 147, in __call__
+    retry_timedelta_triggered = check_retry_fn(e)
+  File "/home/wangshouan/anaconda3/envs/splatam/lib/python3.10/site-packages/wandb/util.py", line 965, in check_retry_fn
+    return fallback_retry_fn(e)
+  File "/home/wangshouan/anaconda3/envs/splatam/lib/python3.10/site-packages/wandb/util.py", line 907, in no_retry_auth
+    raise CommError(
+wandb.errors.CommError: It appears that you do not have permission to access the requested resource. Please reach out to the project owner to grant you access. If you have the correct permissions, verify that there are no issues with your networking setup.(Error 404: Not Found)
+2023-12-14 16:26:26,846 DEBUG   HandlerThread:7848 [handler.py:handle_request():146] handle_request: shutdown
+2023-12-14 16:26:26,846 INFO    HandlerThread:7848 [handler.py:finish():866] shutting down handler
+2023-12-14 16:26:27,086 INFO    SenderThread:7848 [sender.py:finish():1548] shutting down sender
+2023-12-14 16:26:27,390 INFO    WriterThread:7848 [datastore.py:close():294] close: /home/wangshouan/Nerf_Based_Slam_Code/SplaTAM/wandb/run-20231214_162625-jf4sbxmx/run-jf4sbxmx.wandb
