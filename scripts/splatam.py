@@ -74,15 +74,17 @@ def get_dataset(config_dict, basedir, sequence, **kwargs):
     else:
         raise ValueError(f"Unknown dataset name {config_dict['dataset_name']}")
 
-
+# 函数目的：从给定的颜色color、深度depth、相机内参instrinsics、世界到相机的转换矩阵w2c等必要传参中，获取点云
 def get_pointcloud(color, depth, intrinsics, w2c, transform_pts=True, 
                    mask=None, compute_mean_sq_dist=False, mean_sq_dist_method="projective"):
+    # A.内参解析
     width, height = color.shape[2], color.shape[1]
     CX = intrinsics[0][2]
     CY = intrinsics[1][2]
     FX = intrinsics[0][0]
     FY = intrinsics[1][1]
 
+    # B.像素网格生成
     # Compute indices of pixels
     x_grid, y_grid = torch.meshgrid(torch.arange(width).cuda().float(), 
                                     torch.arange(height).cuda().float(),
@@ -93,6 +95,7 @@ def get_pointcloud(color, depth, intrinsics, w2c, transform_pts=True,
     yy = yy.reshape(-1)
     depth_z = depth[0].reshape(-1)
 
+    # C.点云初始化
     # Initialize point cloud
     pts_cam = torch.stack((xx * depth_z, yy * depth_z, depth_z), dim=-1)
     if transform_pts:
@@ -103,7 +106,7 @@ def get_pointcloud(color, depth, intrinsics, w2c, transform_pts=True,
     else:
         pts = pts_cam
 
-    # Compute mean squared distance for initializing the scale of the Gaussians
+    # Optional: Compute mean squared distance for initializing the scale of the Gaussians
     if compute_mean_sq_dist:
         if mean_sq_dist_method == "projective":
             # Projective Geometry (this is fast, farther -> larger radius)
@@ -112,11 +115,12 @@ def get_pointcloud(color, depth, intrinsics, w2c, transform_pts=True,
         else:
             raise ValueError(f"Unknown mean_sq_dist_method {mean_sq_dist_method}")
     
+    # D.点云着色
     # Colorize point cloud
     cols = torch.permute(color, (1, 2, 0)).reshape(-1, 3) # (C, H, W) -> (H, W, C) -> (H * W, C)
     point_cld = torch.cat((pts, cols), -1)
 
-    # Select points based on mask
+    # Optional: Select points based on mask
     if mask is not None:
         point_cld = point_cld[mask]
         if compute_mean_sq_dist:
@@ -127,12 +131,14 @@ def get_pointcloud(color, depth, intrinsics, w2c, transform_pts=True,
     else:
         return point_cld
 
-
+# 函数目的：初始化高斯分布参数
 def initialize_params(init_pt_cld, num_frames, mean3_sq_dist):
+    # A.基本参数设置
     num_pts = init_pt_cld.shape[0]
     means3D = init_pt_cld[:, :3] # [num_gaussians, 3]
     unnorm_rots = np.tile([1, 0, 0, 0], (num_pts, 1)) # [num_gaussians, 3]
     logit_opacities = torch.zeros((num_pts, 1), dtype=torch.float, device="cuda")
+    # 3D Gaussian待优化的参数
     params = {
         'means3D': means3D,
         'rgb_colors': init_pt_cld[:, 3:6],
@@ -141,12 +147,14 @@ def initialize_params(init_pt_cld, num_frames, mean3_sq_dist):
         'log_scales': torch.tile(torch.log(torch.sqrt(mean3_sq_dist))[..., None], (1, 1)),
     }
 
+    # B.相机参数设置
     # Initialize a single gaussian trajectory to model the camera poses relative to the first frame
     cam_rots = np.tile([1, 0, 0, 0], (1, 1))
     cam_rots = np.tile(cam_rots[:, :, None], (1, 1, num_frames))
     params['cam_unnorm_rots'] = cam_rots
     params['cam_trans'] = np.zeros((1, 3, num_frames))
 
+    # C.参数转换为PyTorch张量
     for k, v in params.items():
         # Check if value is already a torch tensor
         if not isinstance(v, torch.Tensor):
@@ -170,11 +178,13 @@ def initialize_optimizer(params, lrs_dict, tracking):
     else:
         return torch.optim.Adam(param_groups, lr=0.0, eps=1e-15)
 
-
+# 函数目的：在全局第一次第一帧做初始化，初始化高斯点云
 def initialize_first_timestep(dataset, num_frames, scene_radius_depth_ratio, mean_sq_dist_method, densify_dataset=None):
     # Get RGB-D Data & Camera Parameters
+    # A.数据获取:从数据集中获取第一帧RGB-D数据（颜色、深度）、相机内参和相机位姿
     color, depth, intrinsics, pose = dataset[0]
 
+    # B.数据处理、格式处理、各项设置
     # Process RGB-D Data
     color = color.permute(2, 0, 1) / 255 # (H, W, C) -> (C, H, W)
     depth = depth.permute(2, 0, 1) # (H, W, C) -> (C, H, W)
@@ -186,6 +196,7 @@ def initialize_first_timestep(dataset, num_frames, scene_radius_depth_ratio, mea
     # Setup Camera
     cam = setup_camera(color.shape[2], color.shape[1], intrinsics.cpu().numpy(), w2c.detach().cpu().numpy())
 
+    # C.密集化处理:如果传参提供了密集化数据集，则做相应处理
     if densify_dataset is not None:
         # Get Densification RGB-D Data & Camera Parameters
         color, depth, densify_intrinsics, _ = densify_dataset[0]
@@ -196,6 +207,7 @@ def initialize_first_timestep(dataset, num_frames, scene_radius_depth_ratio, mea
     else:
         densify_intrinsics = intrinsics
 
+    # D.初始化点云和初始化参数，重点函数get_pointcloud()和initialize_params()
     # Get Initial Point Cloud (PyTorch CUDA Tensor)
     mask = (depth > 0) # Mask out invalid depth values
     mask = mask.reshape(-1)
@@ -234,6 +246,7 @@ def get_loss(params, curr_data, variables, iter_time_idx, loss_weights, use_sil_
     
     elif mapping:
         # mapping的时候BA优化,则高斯和pose的梯度都要优化
+        # 但看完了mapping部分之后，do_ba一直是False
         if do_ba:
             # Get current frame Gaussians, where both camera pose and Gaussians get gradient
             transformed_pts = transform_to_frame(params, iter_time_idx,
@@ -386,12 +399,13 @@ def get_loss(params, curr_data, variables, iter_time_idx, loss_weights, use_sil_
 
 
 
-
+# 函数目的：初始化新的高斯分布参数
 def initialize_new_params(new_pt_cld, mean3_sq_dist):
     num_pts = new_pt_cld.shape[0]
     means3D = new_pt_cld[:, :3] # [num_gaussians, 3]
     unnorm_rots = np.tile([1, 0, 0, 0], (num_pts, 1)) # [num_gaussians, 3]
     logit_opacities = torch.zeros((num_pts, 1), dtype=torch.float, device="cuda")
+    # 3D Gaussian待优化的参数
     params = {
         'means3D': means3D,
         'rgb_colors': new_pt_cld[:, 3:6],
@@ -409,25 +423,30 @@ def initialize_new_params(new_pt_cld, mean3_sq_dist):
     return params
 
 
+# 函数目的：根据输入的深度图，通过阈值 config['mapping']['sil_thres'] 等一系列操作生成掩码，然后在场景中添加新的高斯分布。这些高斯分布代表了场景中的新结构。
+# 传参：当前模型参数 params、变量 variables、密集化数据 densify_curr_data，以及一些配置参数，如阈值、时间索引等。
 def add_new_gaussians(params, variables, curr_data, sil_thres, time_idx, mean_sq_dist_method):
     # Silhouette Rendering
     transformed_pts = transform_to_frame(params, time_idx, gaussians_grad=False, camera_grad=False)
     depth_sil_rendervar = transformed_params2depthplussilhouette(params, curr_data['w2c'],
                                                                  transformed_pts)
+    # 通过渲染器 Renderer 得到深度图和轮廓图，其中 depth_sil 包含了深度信息和轮廓信息，silhouette取出轮廓信息
     depth_sil, _, _, = Renderer(raster_settings=curr_data['cam'])(**depth_sil_rendervar)
     silhouette = depth_sil[1, :, :]
-    non_presence_sil_mask = (silhouette < sil_thres)
+    non_presence_sil_mask = (silhouette < sil_thres) # S(p) < 0.5
     # Check for new foreground objects by using GT depth
     gt_depth = curr_data['depth'][0, :, :]
     render_depth = depth_sil[0, :, :]
     depth_error = torch.abs(gt_depth - render_depth) * (gt_depth > 0)
     non_presence_depth_mask = (render_depth > gt_depth) * (depth_error > 50*depth_error.median())
     # Determine non-presence mask
+    # A.致密化Mask M(p)的创建：对应论文的公式(9)
     non_presence_mask = non_presence_sil_mask | non_presence_depth_mask
     # Flatten mask
     non_presence_mask = non_presence_mask.reshape(-1)
 
     # Get the new frame Gaussians based on the Silhouette
+    # B.对于每个像素，基于此掩模，生成新的高斯分布参数，并将这些参数添加到原有的高斯分布参数中
     if torch.sum(non_presence_mask) > 0:
         # Get the new pointcloud in the world frame
         curr_cam_rot = torch.nn.functional.normalize(params['cam_unnorm_rots'][..., time_idx].detach())
@@ -437,6 +456,7 @@ def add_new_gaussians(params, variables, curr_data, sil_thres, time_idx, mean_sq
         curr_w2c[:3, 3] = curr_cam_tran
         valid_depth_mask = (curr_data['depth'][0, :, :] > 0)
         non_presence_mask = non_presence_mask & valid_depth_mask.reshape(-1)
+        # 重点函数：get_pointcloud()与initialize_new_params()
         new_pt_cld, mean3_sq_dist = get_pointcloud(curr_data['im'], curr_data['depth'], curr_data['intrinsics'], 
                                     curr_w2c, mask=non_presence_mask, compute_mean_sq_dist=True,
                                     mean_sq_dist_method=mean_sq_dist_method)
@@ -596,7 +616,11 @@ def rgbd_slam(config: dict):
             densify_intrinsics, densify_cam = initialize_first_timestep(dataset, num_frames,
                                                                         config['scene_radius_depth_ratio'],
                                                                         config['mean_sq_dist_method'],
-                                                                        densify_dataset=densify_dataset)                                                                                                                  
+                                                                        densify_dataset=densify_dataset) 
+        # initialize_first_timestep()函数对第一帧做Map Initialization的地方；
+        # 上方和下方都使用到了initialize_first_timestep()，在传参处有区别；
+        # 满足if判断，则densify_dataset作为要密集化的数据集传入；
+        # 否则else，densify_dataset默认置为None                                                                                                                 
     else:
         # Initialize Parameters & Canoncial Camera parameters
         params, variables, intrinsics, first_frame_w2c, cam = initialize_first_timestep(dataset, num_frames, 
@@ -715,7 +739,7 @@ def rgbd_slam(config: dict):
         # 设置建图迭代次数
         num_iters_mapping = config['mapping']['num_iters']
         
-        # ******************* 进入Camera Tracking阶段 ******************* 
+        # ******************* Sec. 1  进入Camera Tracking阶段  ******************* 
         # ** Sec 1.1 Camera Pose Initialization **
         # Initialize the camera pose for the current frame
         # 如果当前帧索引大于 0，则初始化相机姿态参数
@@ -849,13 +873,15 @@ def rgbd_slam(config: dict):
 
 
 
-        # ******************* 进入 Densification 和 KeyFrame-based Mapping 阶段 ******************* 
+        # ******************* Sec. 2 和 Sec. 3  进入 Densification 和 KeyFrame-based Mapping 阶段 ******************* 
         # Densification & KeyFrame-based Mapping
         if time_idx == 0 or (time_idx+1) % config['map_every'] == 0:
             # Densification
+            # ******************* Sec. 2 Densification ******************* 
             if config['mapping']['add_new_gaussians'] and time_idx > 0:
                 # Setup Data for Densification
                 if seperate_densification_res:
+                    # 如果if判断成立，逐个加载RGB-D帧，而不是一次性加载所有帧
                     # Load RGBD frames incrementally instead of all frames
                     densify_color, densify_depth, _, _ = densify_dataset[time_idx]
                     densify_color = densify_color.permute(2, 0, 1) / 255
@@ -863,19 +889,24 @@ def rgbd_slam(config: dict):
                     densify_curr_data = {'cam': densify_cam, 'im': densify_color, 'depth': densify_depth, 'id': time_idx, 
                                  'intrinsics': densify_intrinsics, 'w2c': first_frame_w2c, 'iter_gt_w2c_list': curr_gt_w2c}
                 else:
+                    # 否则使用当前数据 curr_data
                     densify_curr_data = curr_data
 
                 # Add new Gaussians to the scene based on the Silhouette
+                # 重点函数：添加新的gaussians
                 params, variables = add_new_gaussians(params, variables, densify_curr_data, 
                                                       config['mapping']['sil_thres'], time_idx,
                                                       config['mean_sq_dist_method'])
+                # 记录添加新的高斯后，post_num_pts是高斯分布数量
                 post_num_pts = params['means3D'].shape[0]
                 if config['use_wandb']:
                     wandb_run.log({"Mapping/Number of Gaussians": post_num_pts,
                                    "Mapping/step": wandb_time_step})
             
-            with torch.no_grad():
+            # KeyFrame Selection
+            with torch.no_grad(): # 在此代码块内部进行的计算不会涉及梯度计算
                 # Get the current estimated rotation & translation
+                # 从时间索引提取当前帧相机位姿并做坐标系转换
                 curr_cam_rot = F.normalize(params['cam_unnorm_rots'][..., time_idx].detach())
                 curr_cam_tran = params['cam_trans'][..., time_idx].detach()
                 curr_w2c = torch.eye(4).cuda().float()
