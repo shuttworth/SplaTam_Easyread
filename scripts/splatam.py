@@ -235,7 +235,6 @@ def get_loss(params, curr_data, variables, iter_time_idx, loss_weights, use_sil_
     # Initialize Loss Dictionary
     losses = {}
 
-
     # tracking的时候camera pose需要计算梯度
     if tracking:
         # Get current frame Gaussians, where only the camera pose gets gradient
@@ -246,7 +245,7 @@ def get_loss(params, curr_data, variables, iter_time_idx, loss_weights, use_sil_
     
     elif mapping:
         # mapping的时候BA优化,则高斯和pose的梯度都要优化
-        # 但看完了mapping部分之后，do_ba一直是False
+        # 但do_ba一直是False，不执行
         if do_ba:
             # Get current frame Gaussians, where both camera pose and Gaussians get gradient
             transformed_pts = transform_to_frame(params, iter_time_idx,
@@ -293,12 +292,12 @@ def get_loss(params, curr_data, variables, iter_time_idx, loss_weights, use_sil_
     # 建一个 nan_mask，用于标记深度和不确定性的有效值，避免处理异常值
     nan_mask = (~torch.isnan(depth)) & (~torch.isnan(uncertainty))
     # 如果开启了 ignore_outlier_depth_loss，则基于深度误差生成一个新的掩码 mask，并且该掩码会剔除深度值异常的区域
-    # 以configs/replica/splatam.py为例，tracking和mapping的ignore_outlier_depth_loss都是False
     if ignore_outlier_depth_loss:
         depth_error = torch.abs(curr_data['depth'] - depth) * (curr_data['depth'] > 0)
         mask = (depth_error < 10*depth_error.median())
         mask = mask & (curr_data['depth'] > 0)
-    # 如果没有开启 ignore_outlier_depth_loss，则直接使用深度大于零的区域作为 mask
+    # 以configs/replica/splatam.py为例，tracking和mapping的ignore_outlier_depth_loss都是False
+    # 实际是没有开启 ignore_outlier_depth_loss，则直接使用深度大于零的区域作为 mask
     else:
         mask = (curr_data['depth'] > 0)
     mask = mask & nan_mask
@@ -319,11 +318,14 @@ def get_loss(params, curr_data, variables, iter_time_idx, loss_weights, use_sil_
             losses['depth'] = torch.abs(curr_data['depth'] - depth)[mask].sum()
         else:
             # 如果不在Tracking环节，计算深度损失为当前深度图与渲染深度图之间差值的绝对值的平均值（只考虑掩码内的区域）
+            # 对于Mapping环节，其mask不需要和presence_sil_mask进行与(&)操作，其mask是直接使用深度大于零的区域
+            # mask没有使用到silhouette，对应原论文的“we want to optimize over all pixels”
             losses['depth'] = torch.abs(curr_data['depth'] - depth)[mask].mean()
     
+
     # RGB Loss
     # 如果在跟踪模式下 (tracking) 并且使用轮廓图进行损失计算 (use_sil_for_loss) 或者忽略异常深度值 (ignore_outlier_depth_loss)
-    # 计算RGB损失 (losses['im']) 为当前图像与渲染图像之间差值的绝对值之和（只考虑掩码内的区域）
+    # 计算RGB损失 (losses['im']) 为当前图像与渲染图像之间差值的绝对值之和
     if tracking and (use_sil_for_loss or ignore_outlier_depth_loss):
         color_mask = torch.tile(mask, (3, 1, 1))
         color_mask = color_mask.detach()
@@ -332,8 +334,10 @@ def get_loss(params, curr_data, variables, iter_time_idx, loss_weights, use_sil_
         # 如果在Tracking环节，但没有使用轮廓图进行损失计算，计算RGB损失为当前图像与渲染图像之间差值的绝对值之和
         losses['im'] = torch.abs(curr_data['im'] - im).sum()
     else:
-        # 如果不在Tracking环节，计算RGB损失为L1损失和结构相似性损失的加权和，其中 l1_loss_v1 是L1损失的计算函数，calc_ssim 是结构相似性损失的计算函数
+        # 如果在Mapping环节，计算RGB损失为L1损失和SSIM(结构相似性损失)的加权和
+        # 其中 l1_loss_v1 是L1损失的计算函数，calc_ssim 是结构相似性损失的计算函数，这部分参照3DGS原论文的设计
         losses['im'] = 0.8 * l1_loss_v1(im, curr_data['im']) + 0.2 * (1.0 - calc_ssim(im, curr_data['im']))
+
 
     # 可视化
     # Visualize the Diff Images
@@ -903,6 +907,7 @@ def rgbd_slam(config: dict):
                     wandb_run.log({"Mapping/Number of Gaussians": post_num_pts,
                                    "Mapping/step": wandb_time_step})
             
+            # ******************* Sec. 3 Keyframe-based Map Update ******************* 
             # KeyFrame Selection
             with torch.no_grad(): # 在此代码块内部进行的计算不会涉及梯度计算
                 # Get the current estimated rotation & translation
@@ -912,10 +917,15 @@ def rgbd_slam(config: dict):
                 curr_w2c = torch.eye(4).cuda().float()
                 curr_w2c[:3, :3] = build_rotation(curr_cam_rot)
                 curr_w2c[:3, 3] = curr_cam_tran
+
                 # Select Keyframes for Mapping
+                # 根据配置中的 mapping_window_size，计算需要选择的关键帧数量 num_keyframes
+                # 这里的减去2对应论文的原文，对应着"k-2个先前关键帧"的由来，在参数传入的时候就做好了k-2的限制
                 num_keyframes = config['mapping_window_size']-2
+                # 重点函数：keyframe_selection_overlap，根据重叠程度进行关键帧选择
                 selected_keyframes = keyframe_selection_overlap(depth, curr_w2c, intrinsics, keyframe_list[:-1], num_keyframes)
                 selected_time_idx = [keyframe_list[frame_idx]['id'] for frame_idx in selected_keyframes]
+                # 添加最后一帧和当前帧到关键帧列表
                 if len(keyframe_list) > 0:
                     # Add last keyframe to the selected keyframes
                     selected_time_idx.append(keyframe_list[-1]['id'])
@@ -927,6 +937,7 @@ def rgbd_slam(config: dict):
                 print(f"\nSelected Keyframes at Frame {time_idx}: {selected_time_idx}")
 
             # Reset Optimizer & Learning Rates for Full Map Optimization
+            # 执行Mapping的优化前，初始化优化器
             optimizer = initialize_optimizer(params, config['mapping']['lrs'], tracking=False) 
 
             # Mapping
@@ -952,6 +963,7 @@ def rgbd_slam(config: dict):
                 iter_data = {'cam': cam, 'im': iter_color, 'depth': iter_depth, 'id': iter_time_idx, 
                              'intrinsics': intrinsics, 'w2c': first_frame_w2c, 'iter_gt_w2c_list': iter_gt_w2c}
                 # Loss for current frame
+                # 重点函数：计算当前帧的损失
                 loss, variables, losses = get_loss(params, iter_data, variables, iter_time_idx, config['mapping']['loss_weights'],
                                                 config['mapping']['use_sil_for_loss'], config['mapping']['sil_thres'],
                                                 config['mapping']['use_l1'], config['mapping']['ignore_outlier_depth_loss'], mapping=True)
@@ -962,12 +974,14 @@ def rgbd_slam(config: dict):
                 loss.backward()
                 with torch.no_grad():
                     # Prune Gaussians
+                    # 以configs/replica/splatam.py为例，config['mapping']['prune_gaussians']=True，执行
                     if config['mapping']['prune_gaussians']:
                         params, variables = prune_gaussians(params, variables, optimizer, iter, config['mapping']['pruning_dict'])
                         if config['use_wandb']:
                             wandb_run.log({"Mapping/Number of Gaussians - Pruning": params['means3D'].shape[0],
                                            "Mapping/step": wandb_mapping_step})
                     # Gaussian-Splatting's Gradient-based Densification
+                    # 以configs/replica/splatam.py为例，config['mapping']['use_gaussian_splatting_densification']=False，不执行
                     if config['mapping']['use_gaussian_splatting_densification']:
                         params, variables = densify(params, variables, optimizer, iter, config['mapping']['densify_dict'])
                         if config['use_wandb']:

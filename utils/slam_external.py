@@ -164,23 +164,29 @@ def inverse_sigmoid(x):
     return torch.log(x / (1 - x))
 
 
+# 函数目的：高斯剪枝，移除透明度低和过大的高斯
 def prune_gaussians(params, variables, optimizer, iter, prune_dict):
+    # 根据迭代次数选择修剪策略
     if iter <= prune_dict['stop_after']:
         if (iter >= prune_dict['start_after']) and (iter % prune_dict['prune_every'] == 0):
             if iter == prune_dict['stop_after']:
-                remove_threshold = prune_dict['final_removal_opacity_threshold']
+                remove_threshold = prune_dict['final_removal_opacity_threshold']  # 设置修剪阈值
             else:
-                remove_threshold = prune_dict['removal_opacity_threshold']
+                remove_threshold = prune_dict['removal_opacity_threshold']  # 设置修剪阈值
             # Remove Gaussians with low opacity
+            # 移除低不透明度的高斯
             to_remove = (torch.sigmoid(params['logit_opacities']) < remove_threshold).squeeze()
             # Remove Gaussians that are too big
+            # 移除过大的高斯
             if iter >= prune_dict['remove_big_after']:
                 big_points_ws = torch.exp(params['log_scales']).max(dim=1).values > 0.1 * variables['scene_radius']
                 to_remove = torch.logical_or(to_remove, big_points_ws)
+            # 执行移除操作
             params, variables = remove_points(to_remove, params, variables, optimizer)
             torch.cuda.empty_cache()
         
         # Reset Opacities for all Gaussians
+        # 满足if条件，重置高斯不透明度
         if iter > 0 and iter % prune_dict['reset_opacities_every'] == 0 and prune_dict['reset_opacities']:
             new_params = {'logit_opacities': inverse_sigmoid(torch.ones_like(params['logit_opacities']) * 0.01)}
             params = update_params_and_optimizer(new_params, params, optimizer)
