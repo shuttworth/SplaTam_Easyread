@@ -791,7 +791,9 @@ def rgbd_slam(config: dict):
                 loss.backward()
                 
                 # Optimizer Update
+                # 更新模型参数
                 optimizer.step()
+                # 清除已计算的梯度
                 optimizer.zero_grad(set_to_none=True)
 
                 with torch.no_grad():
